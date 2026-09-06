@@ -1,0 +1,3 @@
+"ciflow/rl":
+  - torchtitan/experiments/rl/**
+  - .github/workflows/integration_test_8gpu_rl.yaml
