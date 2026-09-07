@@ -109,7 +109,10 @@ class ConstantQTransform(Module):
             transformer's ``(B, T, C)`` convention).
         """
         pad = self.max_kernel_length // 2
-        x_B1T = F.pad(waveform_BT, (pad, pad), mode="constant").unsqueeze(1)
+        # Always compute in fp32 regardless of the caller's ambient training
+        # dtype: this is a non-differentiable target (the caller wraps it in
+        # ``torch.no_grad()``), and the kernel buffers are fp32.
+        x_B1T = F.pad(waveform_BT.float(), (pad, pad), mode="constant").unsqueeze(1)
         real_BKF = F.conv1d(x_B1T, self.kernel_real, stride=self.hop_length)
         imag_BKF = F.conv1d(x_B1T, self.kernel_imag, stride=self.hop_length)
         magnitude_BKF = torch.sqrt(real_BKF.pow(2) + imag_BKF.pow(2) + 1e-10)

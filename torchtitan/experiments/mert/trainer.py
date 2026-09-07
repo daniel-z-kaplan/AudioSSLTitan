@@ -23,17 +23,41 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 import spmd_types as spmd
 import torch
 
 from torchtitan.components.data.loader import DataloaderExhaustedError
+from torchtitan.config import TORCH_DTYPE_MAP
 from torchtitan.distributed import utils as dist_utils
 from torchtitan.trainer import Trainer
 
 
 class MERTTrainer(Trainer):
+    # A subclass must define its own ``Config`` (even with no new fields) so
+    # ``Configurable.__init_subclass__`` binds ``Config._owner`` to
+    # ``MERTTrainer``, not ``Trainer``. Without this, ``MERTTrainer.Config``
+    # would just resolve to the inherited ``Trainer.Config``, whose
+    # ``.build()`` constructs a plain ``Trainer`` -- silently skipping every
+    # override below.
+    @dataclass(kw_only=True, slots=True)
+    class Config(Trainer.Config):
+        pass
+
+    def __init__(self, config: Config):
+        super().__init__(config)
+        # parallelize_mert always wraps the model in fully_shard (even at
+        # data_parallel_shard_degree=1 -- that's a valid, commonly used FSDP2
+        # degree, not "FSDP disabled"), so MixedPrecisionPolicy always casts
+        # *parameters* to mixed_precision_param during forward. Since
+        # parallelize_mert sets cast_forward_inputs=False, the model's own
+        # float input must already be in that dtype -- unlike token-id
+        # inputs (embedding lookups tolerate any input dtype), MERT's
+        # raw-audio input feeds straight into a conv weight.
+        self._input_dtype = TORCH_DTYPE_MAP[config.training.mixed_precision_param]
+
     def batch_generator(
         self, data_iterable: Iterable[tuple[dict[str, torch.Tensor], torch.Tensor]]
     ) -> Iterator[tuple[dict[str, torch.Tensor], torch.Tensor]]:
@@ -69,7 +93,7 @@ class MERTTrainer(Trainer):
         assert isinstance(labels, torch.Tensor)
 
         model = self.model_parts[0]
-        source_BT = input_dict["source"]
+        source_BT = input_dict["source"].to(self._input_dtype)
         self.ntokens_seen += labels.shape[1] * labels.shape[2]
 
         with self.train_context():
