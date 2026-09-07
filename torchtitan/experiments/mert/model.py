@@ -704,4 +704,17 @@ class MERTModel(BaseModel):
             output["cqt_target_BFV"] = cqt_target_BFcV
             output["cqt_pred_BFV"] = self.cqt_proj(x_BFD)
 
-        return output
+        # FSDP2 warns when a fully_shard-wrapped module's *own* forward
+        # output contains a view tensor that requires grad (an in-place op
+        # on it downstream could silently drop the pre-backward hook). This
+        # applies not just to raw slices (mask_BF, cqt_target_BFV above) but
+        # also to cqt_pred_BFV: nn.Linear on a >2D input internally computes
+        # a 2D matmul then ``.view()``s it back to (B, F, C), and that
+        # reshape is itself a view op -- of PyTorch's own intermediate
+        # result, not of anything we did -- so it is a view regardless.
+        # ``.clone()`` (not ``.contiguous()``, which no-ops on an
+        # already-contiguous view) materializes every such tensor.
+        return {
+            key: value.clone() if value.requires_grad else value
+            for key, value in output.items()
+        }
